@@ -1,0 +1,17 @@
+<!doctype html>
+<html>
+  <body>
+    <pre>GIT_TRACE=1 GIT_TRANSFER_TRACE=1 GIT_CURL_VERBOSE=1 git clone https://github.com/github/debug-repo /tmp/debug-repo-http
+GIT_TRACE=1 GIT_TRANSFER_TRACE=1 GIT_CURL_VERBOSE=1 git clone git@github.com:github/debug-repo /tmp/debug-repo-ssh
+
+ping -c 10 github.com
+traceroute github.com
+curl -s -o/dev/null -w "downloadspeed: %{speed_download} | dnslookup: %{time_namelookup} | connect: %{time_connect} | appconnect: %{time_appconnect} | pretransfer: %{time_pretransfer} | starttransfer: %{time_starttransfer} | total: %{time_total} | size: %{size_download}\n" https://github.com</pre>
+    <pre>git clone https://github.com/github/debug-repo debug-repo-http
+git clone git@github.com:github/debug-repo debug-repo-ssh
+
+ping -n 10 github.com
+tracert github.com</pre>
+    <pre id="testResults"><div id="github.com">Please wait ...</div></pre>
+  </body>
+</html>

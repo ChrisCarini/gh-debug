@@ -1,0 +1,47 @@
+{
+  "api_endpoint": "/api",
+  "commands": {
+    "linux_macos": [
+      "GIT_TRACE=1 GIT_TRANSFER_TRACE=1 GIT_CURL_VERBOSE=1 git clone https://github.com/github/debug-repo /tmp/debug-repo-http",
+      "GIT_TRACE=1 GIT_TRANSFER_TRACE=1 GIT_CURL_VERBOSE=1 git clone git@github.com:github/debug-repo /tmp/debug-repo-ssh",
+      "ping -c 10 github.com",
+      "traceroute github.com",
+      "curl -s -o/dev/null -w \"downloadspeed: %{speed_download} | dnslookup: %{time_namelookup} | connect: %{time_connect} | appconnect: %{time_appconnect} | pretransfer: %{time_pretransfer} | starttransfer: %{time_starttransfer} | total: %{time_total} | size: %{size_download}\\n\" https://github.com"
+    ],
+    "windows": [
+      "git clone https://github.com/github/debug-repo debug-repo-http",
+      "git clone git@github.com:github/debug-repo debug-repo-ssh",
+      "ping -n 10 github.com",
+      "tracert github.com"
+    ]
+  },
+  "sites": [
+    "github.com",
+    "cloud.githubusercontent.com",
+    "avatars.githubusercontent.com",
+    "github.githubassets.com",
+    "australiaeast.github-debug.com",
+    "brazilsouth.github-debug.com",
+    "centralindia.github-debug.com",
+    "fra.github-debug.com",
+    "iad.github-debug.com",
+    "israelcentral.github-debug.com",
+    "japaneast.github-debug.com",
+    "koreacentral.github-debug.com",
+    "northeurope.github-debug.com",
+    "sea.github-debug.com",
+    "southafricanorth.github-debug.com",
+    "southeastasia.github-debug.com",
+    "swedencentral.github-debug.com",
+    "uaenorth.github-debug.com",
+    "uksouth.github-debug.com",
+    "github-cloud.s3.amazonaws.com"
+  ],
+  "test_assets": {
+    "github-debug-test.jpg": {
+      "bytes": 2507998,
+      "path": "/github-debug-test.jpg"
+    }
+  },
+  "test_connection_endpoint": "/api/testconnect"
+}

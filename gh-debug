@@ -123,15 +123,6 @@ run_skip() {
   emit "Skipped: $reason"
 }
 
-safe_remove_clone_target() {
-  target=$1
-  case "$target" in
-    "$WORK_DIR"/debug-repo-http|"$WORK_DIR"/debug-repo-ssh|debug-repo-http|debug-repo-ssh)
-      rm -rf -- "$target"
-      ;;
-  esac
-}
-
 asset_url_for_site() {
   site=$1
   case "$site" in
@@ -151,15 +142,11 @@ run_clone_tests() {
   fi
 
   if is_windows; then
-    safe_remove_clone_target "debug-repo-http"
-    safe_remove_clone_target "debug-repo-ssh"
     run_check "Git clone over HTTPS" "git clone https://github.com/github/debug-repo debug-repo-http" git clone https://github.com/github/debug-repo debug-repo-http
     run_check "Git clone over SSH" "git clone git@github.com:github/debug-repo debug-repo-ssh" git clone git@github.com:github/debug-repo debug-repo-ssh
   else
     http_target="$WORK_DIR/debug-repo-http"
     ssh_target="$WORK_DIR/debug-repo-ssh"
-    safe_remove_clone_target "$http_target"
-    safe_remove_clone_target "$ssh_target"
     run_check "Git clone over HTTPS" "GIT_TRACE=1 GIT_TRANSFER_TRACE=1 GIT_CURL_VERBOSE=1 git clone https://github.com/github/debug-repo $http_target" env GIT_TRACE=1 GIT_TRANSFER_TRACE=1 GIT_CURL_VERBOSE=1 git clone https://github.com/github/debug-repo "$http_target"
     run_check "Git clone over SSH" "GIT_TRACE=1 GIT_TRANSFER_TRACE=1 GIT_CURL_VERBOSE=1 git clone git@github.com:github/debug-repo $ssh_target" env GIT_TRACE=1 GIT_TRANSFER_TRACE=1 GIT_CURL_VERBOSE=1 git clone git@github.com:github/debug-repo "$ssh_target"
   fi

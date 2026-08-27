@@ -7,61 +7,25 @@ trap 'rm -rf "$TMP_DIR"' EXIT
 
 FAKE_BIN="$TMP_DIR/bin"
 OUTPUT_DIR="$TMP_DIR/reports"
-mkdir -p "$FAKE_BIN" "$OUTPUT_DIR"
-
-cat > "$FAKE_BIN/gh" <<'STUB'
-#!/usr/bin/env bash
-case "$*" in
-  "--version")
-    printf 'gh version 9.9.9 (test)\n'
-    ;;
-  "auth status")
-    printf 'github.com: Logged in to github.com account test-user\n'
-    ;;
-  "api /user")
-    printf '{"login":"test-user"}\n'
-    ;;
-  "api /rate_limit")
-    printf '{"rate":{"remaining":4999}}\n'
-    ;;
-  "api /meta")
-    printf '{"verifiable_password_authentication":true}\n'
-    ;;
-  "repo view --json nameWithOwner,defaultBranchRef,viewerPermission,isPrivate")
-    printf '{"nameWithOwner":"example/repo","isPrivate":false}\n'
-    ;;
-  *)
-    printf 'unexpected gh args: %s\n' "$*" >&2
-    exit 64
-    ;;
-esac
-STUB
-chmod +x "$FAKE_BIN/gh"
+WORK_DIR="$TMP_DIR/work"
+mkdir -p "$FAKE_BIN" "$OUTPUT_DIR" "$WORK_DIR"
 
 cat > "$FAKE_BIN/git" <<'STUB'
 #!/usr/bin/env bash
 case "$*" in
-  "--version")
-    printf 'git version 2.99.0\n'
+  "clone https://github.com/github/debug-repo "*)
+    if [ "${GIT_TRACE:-}" != "1" ] || [ "${GIT_TRANSFER_TRACE:-}" != "1" ] || [ "${GIT_CURL_VERBOSE:-}" != "1" ]; then
+      printf 'missing git trace environment\n' >&2
+      exit 65
+    fi
+    printf 'Cloning into %s over HTTPS\n' "${*: -1}"
     ;;
-  "rev-parse --is-inside-work-tree")
-    printf 'true\n'
-    ;;
-  "status --short --branch")
-    printf '## main...origin/main\n'
-    ;;
-  "remote -v")
-    printf 'origin\thttps://secret-token@github.com/example/repo.git (fetch)\n'
-    printf 'origin\thttps://secret-token@github.com/example/repo.git (push)\n'
-    ;;
-  "config --get remote.origin.url")
-    printf 'https://secret-token@github.com/example/repo.git\n'
-    ;;
-  "config --get user.name")
-    printf 'Test User\n'
-    ;;
-  "config --get user.email")
-    printf 'test@example.com\n'
+  "clone git@github.com:github/debug-repo "*)
+    if [ "${GIT_TRACE:-}" != "1" ] || [ "${GIT_TRANSFER_TRACE:-}" != "1" ] || [ "${GIT_CURL_VERBOSE:-}" != "1" ]; then
+      printf 'missing git trace environment\n' >&2
+      exit 65
+    fi
+    printf 'Cloning into %s over SSH\n' "${*: -1}"
     ;;
   *)
     printf 'unexpected git args: %s\n' "$*" >&2
@@ -71,8 +35,49 @@ esac
 STUB
 chmod +x "$FAKE_BIN/git"
 
+cat > "$FAKE_BIN/ping" <<'STUB'
+#!/usr/bin/env bash
+if [ "$*" != "-c 10 github.com" ]; then
+  printf 'unexpected ping args: %s\n' "$*" >&2
+  exit 64
+fi
+printf '10 packets transmitted, 10 received\n'
+STUB
+chmod +x "$FAKE_BIN/ping"
+
+cat > "$FAKE_BIN/traceroute" <<'STUB'
+#!/usr/bin/env bash
+if [ "$*" != "github.com" ]; then
+  printf 'unexpected traceroute args: %s\n' "$*" >&2
+  exit 64
+fi
+printf 'traceroute to github.com\n'
+STUB
+chmod +x "$FAKE_BIN/traceroute"
+
+cat > "$FAKE_BIN/curl" <<'STUB'
+#!/usr/bin/env bash
+last_arg=${!#}
+case "$last_arg" in
+  https://github.com)
+    printf 'downloadspeed: 12345 | dnslookup: 0.001 | connect: 0.002 | appconnect: 0.003 | pretransfer: 0.004 | starttransfer: 0.005 | total: 0.006 | size: 123\n'
+    ;;
+  https://github-debug.com/api)
+    printf '{"ip":"127.0.0.1","user_agent":"test","served_by":"stub","request_id":"abc"}\n'
+    ;;
+  https://github.com/images/github-debug-test.jpg\?n=*|https://github.githubassets.com/images/github-debug-test.jpg\?n=*|https://*/github-debug-test.jpg\?n=*)
+    printf 'asset download ok\n'
+    ;;
+  *)
+    printf 'unexpected curl url: %s\nargs: %s\n' "$last_arg" "$*" >&2
+    exit 64
+    ;;
+esac
+STUB
+chmod +x "$FAKE_BIN/curl"
+
 STDOUT_FILE="$TMP_DIR/stdout.txt"
-PATH="$FAKE_BIN:$PATH" "$ROOT_DIR/gh-debug" --output-dir "$OUTPUT_DIR" > "$STDOUT_FILE"
+PATH="$FAKE_BIN:$PATH" "$ROOT_DIR/gh-debug" --output-dir "$OUTPUT_DIR" --work-dir "$WORK_DIR" > "$STDOUT_FILE"
 
 mapfile -t reports < <(find "$OUTPUT_DIR" -maxdepth 1 -type f -name 'gh-debug-*.md' | sort)
 if [ "${#reports[@]}" -ne 1 ]; then
@@ -105,14 +110,27 @@ assert_not_contains() {
   fi
 }
 
+connection_count=$(grep -c '^## Connection data:' "$REPORT_FILE")
+if [ "$connection_count" -ne 20 ]; then
+  printf 'expected 20 connection data checks, found %s\n' "$connection_count" >&2
+  exit 1
+fi
+
 assert_contains "$STDOUT_FILE" '# GitHub Debug Report'
-assert_contains "$STDOUT_FILE" 'gh version 9.9.9 (test)'
+assert_contains "$STDOUT_FILE" 'GIT_TRACE=1 GIT_TRANSFER_TRACE=1 GIT_CURL_VERBOSE=1 git clone https://github.com/github/debug-repo'
+assert_contains "$REPORT_FILE" '## Git clone over HTTPS'
+assert_contains "$REPORT_FILE" '## Git clone over SSH'
+assert_contains "$REPORT_FILE" '## Ping github.com'
+assert_contains "$REPORT_FILE" '## Traceroute github.com'
+assert_contains "$REPORT_FILE" '## Curl timing for github.com'
+assert_contains "$REPORT_FILE" '## github-debug.com API data'
+assert_contains "$REPORT_FILE" '## Connection data: github.githubassets.com'
+assert_contains "$REPORT_FILE" 'https://github.githubassets.com/images/github-debug-test.jpg?n='
+assert_contains "$REPORT_FILE" '## Connection data: github-cloud.s3.amazonaws.com'
+assert_contains "$REPORT_FILE" 'https://github-cloud.s3.amazonaws.com/github-debug-test.jpg?n='
+assert_contains "$REPORT_FILE" '2507998 bytes downloaded from github-cloud.s3.amazonaws.com at '
+assert_not_contains "$REPORT_FILE" 'api/testconnect'
 assert_contains "$STDOUT_FILE" "Report written to $REPORT_FILE"
-assert_contains "$REPORT_FILE" 'Generated at:'
-assert_contains "$REPORT_FILE" '## GitHub CLI Authentication'
-assert_contains "$REPORT_FILE" '## GitHub API Rate Limit'
-assert_contains "$REPORT_FILE" '## Git Remotes'
-assert_contains "$REPORT_FILE" 'https://***@github.com/example/repo.git'
 assert_not_contains "$REPORT_FILE" 'secret-token'
 assert_not_contains "$STDOUT_FILE" 'secret-token'
 

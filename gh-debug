@@ -1,23 +1,29 @@
 #!/usr/bin/env bash
 set -u
 
-VERSION="0.1.0"
+VERSION="0.2.0"
 OUTPUT_DIR=${GH_DEBUG_OUTPUT_DIR:-.}
+WORK_DIR=${GH_DEBUG_WORK_DIR:-/tmp}
+TEST_ASSET="github-debug-test.jpg"
+TEST_ASSET_BYTES=2507998
+CURL_TIMING_FORMAT='downloadspeed: %{speed_download} | dnslookup: %{time_namelookup} | connect: %{time_connect} | appconnect: %{time_appconnect} | pretransfer: %{time_pretransfer} | starttransfer: %{time_starttransfer} | total: %{time_total} | size: %{size_download}\n'
 
 usage() {
   cat <<'USAGE'
-gh-debug - collect GitHub CLI and repository diagnostics
+gh-debug - collect GitHub connectivity diagnostics
 
 USAGE:
-  gh debug [--output-dir DIR]
+  gh debug [--output-dir DIR] [--work-dir DIR]
 
 OPTIONS:
   -o, --output-dir DIR  Directory where the markdown report is written (default: current directory)
+  -w, --work-dir DIR    Directory used for temporary clone targets (default: /tmp)
   -h, --help            Show this help text
       --version         Show the extension version
 
-The extension prints diagnostics to the terminal and writes the same output to an
-ISO-8601 timestamped markdown file.
+The extension runs the same local commands and connection data checks listed by
+github-debug.com, prints diagnostics to the terminal, and writes the same output
+to an ISO-8601 timestamped markdown file.
 USAGE
 }
 
@@ -29,6 +35,14 @@ while [ "$#" -gt 0 ]; do
         exit 2
       fi
       OUTPUT_DIR=$2
+      shift 2
+      ;;
+    -w|--work-dir)
+      if [ "$#" -lt 2 ]; then
+        printf 'error: %s requires a directory\n' "$1" >&2
+        exit 2
+      fi
+      WORK_DIR=$2
       shift 2
       ;;
     -h|--help)
@@ -47,8 +61,8 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 
-if ! mkdir -p "$OUTPUT_DIR"; then
-  printf 'error: unable to create output directory: %s\n' "$OUTPUT_DIR" >&2
+if ! mkdir -p "$OUTPUT_DIR" "$WORK_DIR"; then
+  printf 'error: unable to create output or work directory\n' >&2
   exit 1
 fi
 
@@ -71,19 +85,23 @@ have_command() {
   command -v "$1" >/dev/null 2>&1
 }
 
-inside_git_work_tree() {
-  have_command git && git rev-parse --is-inside-work-tree >/dev/null 2>&1
+is_windows() {
+  case "${OS:-} $(uname -s 2>/dev/null || printf unknown)" in
+    *Windows_NT*|*MINGW*|*MSYS*|*CYGWIN*) return 0 ;;
+    *) return 1 ;;
+  esac
 }
 
 run_check() {
   title=$1
-  shift
+  command_text=$2
+  shift 2
 
   emit ""
   emit "## $title"
   emit ""
   emit '```console'
-  emit "\$ $*"
+  emit "\$ $command_text"
 
   output=$("$@" 2>&1)
   status=$?
@@ -105,37 +123,165 @@ run_skip() {
   emit "Skipped: $reason"
 }
 
+safe_remove_clone_target() {
+  target=$1
+  case "$target" in
+    "$WORK_DIR"/debug-repo-http|"$WORK_DIR"/debug-repo-ssh|debug-repo-http|debug-repo-ssh)
+      rm -rf -- "$target"
+      ;;
+  esac
+}
+
+asset_url_for_site() {
+  site=$1
+  case "$site" in
+    github.com|github.githubassets.com)
+      printf 'https://%s/images/%s?n=%s' "$site" "$TEST_ASSET" "$(date '+%s')"
+      ;;
+    *)
+      printf 'https://%s/%s?n=%s' "$site" "$TEST_ASSET" "$(date '+%s')"
+      ;;
+  esac
+}
+
+run_clone_tests() {
+  if ! have_command git; then
+    run_skip "Git clone tests" "git is not installed or is not on PATH"
+    return 0
+  fi
+
+  if is_windows; then
+    safe_remove_clone_target "debug-repo-http"
+    safe_remove_clone_target "debug-repo-ssh"
+    run_check "Git clone over HTTPS" "git clone https://github.com/github/debug-repo debug-repo-http" git clone https://github.com/github/debug-repo debug-repo-http
+    run_check "Git clone over SSH" "git clone git@github.com:github/debug-repo debug-repo-ssh" git clone git@github.com:github/debug-repo debug-repo-ssh
+  else
+    http_target="$WORK_DIR/debug-repo-http"
+    ssh_target="$WORK_DIR/debug-repo-ssh"
+    safe_remove_clone_target "$http_target"
+    safe_remove_clone_target "$ssh_target"
+    run_check "Git clone over HTTPS" "GIT_TRACE=1 GIT_TRANSFER_TRACE=1 GIT_CURL_VERBOSE=1 git clone https://github.com/github/debug-repo $http_target" env GIT_TRACE=1 GIT_TRANSFER_TRACE=1 GIT_CURL_VERBOSE=1 git clone https://github.com/github/debug-repo "$http_target"
+    run_check "Git clone over SSH" "GIT_TRACE=1 GIT_TRANSFER_TRACE=1 GIT_CURL_VERBOSE=1 git clone git@github.com:github/debug-repo $ssh_target" env GIT_TRACE=1 GIT_TRANSFER_TRACE=1 GIT_CURL_VERBOSE=1 git clone git@github.com:github/debug-repo "$ssh_target"
+  fi
+}
+
+run_network_commands() {
+  if is_windows; then
+    if have_command ping; then
+      run_check "Ping github.com" "ping -n 10 github.com" ping -n 10 github.com
+    else
+      run_skip "Ping github.com" "ping is not installed or is not on PATH"
+    fi
+
+    if have_command tracert; then
+      run_check "Traceroute github.com" "tracert github.com" tracert github.com
+    else
+      run_skip "Traceroute github.com" "tracert is not installed or is not on PATH"
+    fi
+    return 0
+  fi
+
+  if have_command ping; then
+    run_check "Ping github.com" "ping -c 10 github.com" ping -c 10 github.com
+  else
+    run_skip "Ping github.com" "ping is not installed or is not on PATH"
+  fi
+
+  if have_command traceroute; then
+    run_check "Traceroute github.com" "traceroute github.com" traceroute github.com
+  else
+    run_skip "Traceroute github.com" "traceroute is not installed or is not on PATH"
+  fi
+
+  if have_command curl; then
+    run_check "Curl timing for github.com" "curl -s -o/dev/null -w \"$CURL_TIMING_FORMAT\" https://github.com" curl -s -o/dev/null -w "$CURL_TIMING_FORMAT" https://github.com
+  else
+    run_skip "Curl timing for github.com" "curl is not installed or is not on PATH"
+  fi
+}
+
+run_asset_download() {
+  site=$1
+  url=$2
+
+  emit ""
+  emit "## Connection data: $site"
+  emit ""
+  emit '```console'
+  emit "\$ curl -L -s -o/dev/null $url"
+  emit "Testing download from $site..."
+
+  start_ns=$(date '+%s%N')
+  output=$(curl -L -s -o/dev/null "$url" 2>&1)
+  status=$?
+  end_ns=$(date '+%s%N')
+
+  if [ -n "$output" ]; then
+    printf '%s\n' "$output" | redact | tee -a "$REPORT_PATH"
+  fi
+
+  if [ "$status" -eq 0 ]; then
+    duration_ns=$((end_ns - start_ns))
+    if [ "$duration_ns" -le 0 ]; then
+      duration_ns=1
+    fi
+    mbps=$(awk -v bytes="$TEST_ASSET_BYTES" -v ns="$duration_ns" 'BEGIN { printf "%.2f", ((bytes * 8) / (ns / 1000000000)) / 1024 / 1024 }')
+    emit "$TEST_ASSET_BYTES bytes downloaded from $site at $mbps Mbps"
+  else
+    emit "Error downloading from $site"
+  fi
+  emit "exit status: $status"
+  emit '```'
+  return 0
+}
+
+run_connection_data() {
+  if ! have_command curl; then
+    run_skip "Connection data" "curl is not installed or is not on PATH"
+    return 0
+  fi
+
+  run_check "github-debug.com API data" "curl -s https://github-debug.com/api" curl -s https://github-debug.com/api
+
+  sites='github.com
+cloud.githubusercontent.com
+avatars.githubusercontent.com
+github.githubassets.com
+australiaeast.github-debug.com
+brazilsouth.github-debug.com
+centralindia.github-debug.com
+fra.github-debug.com
+iad.github-debug.com
+israelcentral.github-debug.com
+japaneast.github-debug.com
+koreacentral.github-debug.com
+northeurope.github-debug.com
+sea.github-debug.com
+southafricanorth.github-debug.com
+southeastasia.github-debug.com
+swedencentral.github-debug.com
+uaenorth.github-debug.com
+uksouth.github-debug.com
+github-cloud.s3.amazonaws.com'
+
+  printf '%s\n' "$sites" | while IFS= read -r site; do
+    [ -n "$site" ] || continue
+    url=$(asset_url_for_site "$site")
+    run_asset_download "$site" "$url"
+  done
+}
+
 : > "$REPORT_PATH"
 emit "# GitHub Debug Report"
 emit ""
 emit "Generated at: $REPORT_TIMESTAMP"
 emit "Report path: $REPORT_PATH"
+emit ""
+emit "This report runs the local commands and connection data checks listed by github-debug.com."
 
-if have_command gh; then
-  run_check "GitHub CLI Version" gh --version
-  run_check "GitHub CLI Authentication" gh auth status
-  run_check "GitHub API User" gh api /user
-  run_check "GitHub API Rate Limit" gh api /rate_limit
-  run_check "GitHub API Metadata" gh api /meta
-  run_check "Current GitHub Repository" gh repo view --json nameWithOwner,defaultBranchRef,viewerPermission,isPrivate
-else
-  run_skip "GitHub CLI Checks" "gh is not installed or is not on PATH"
-fi
-
-if have_command git; then
-  run_check "Git Version" git --version
-  if inside_git_work_tree; then
-    run_check "Git Repository Status" git status --short --branch
-    run_check "Git Remotes" git remote -v
-    run_check "GitHub Origin URL" git config --get remote.origin.url
-    run_check "Git User Name" git config --get user.name
-    run_check "Git User Email" git config --get user.email
-  else
-    run_skip "Git Repository Checks" "current directory is not inside a git work tree"
-  fi
-else
-  run_skip "Git Checks" "git is not installed or is not on PATH"
-fi
+run_clone_tests
+run_network_commands
+run_connection_data
 
 emit ""
 emit "Report written to $REPORT_PATH"

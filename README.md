@@ -101,3 +101,13 @@ Run tests:
 ```sh
 make test
 ```
+
+## Maintenance
+
+GitHub Actions workflow actions are pinned to commit SHAs with semver comments.
+Dependabot is configured to keep those GitHub Actions references up to date.
+
+The `Monitor github-debug.com` workflow runs daily and on demand. It compares the
+live webpage's meaningful diagnostics inputs (listed commands, test asset data,
+hosts, and API endpoints) against `.github/github-debug-snapshot.json` and opens
+an issue when the checked-in snapshot no longer matches the site.
